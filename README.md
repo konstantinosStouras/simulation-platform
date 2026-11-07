@@ -35,6 +35,14 @@ plain `.wrap`.
 
 ## Files
 
+**PortfolioFit verification with anonymous completions:** when a session skips
+registration, completed participants may have neither a student ID nor an e-mail.
+The verifier still syncs identifiable completions, but preserves all unmatched
+existing marks while any completed record lacks identity. Its summary reports
+incomplete verification rather than claiming the roster matches or offering to
+remove those marks. This does not change simulation records or session settings.
+Regression check from this repository: `node tools/portfoliofit-identity-guard.mjs`.
+
 | File | Role |
 |---|---|
 | `index.html` | Student page: one-time registration → card grid of active sims → launch dialog |

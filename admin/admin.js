@@ -827,13 +827,14 @@
       var read = rr.read;
       var doneById = read.doneById || {};       // normalized student ID -> mark
       var doneByEmail = read.doneByEmail || {}; // normalized e-mail -> mark
+      var unidentifiedCompleted = Number(read.unidentifiedCompleted) || 0;
       var rosterRows = rr.rosterRows || lastRows;
       /* SAFETY: a read that returned no participant records at all means
          something went wrong (wrong project, empty result, permissions) —
          never treat that as "nobody completed anything" and revoke the whole
          class. */
       if (!read.records) throw new Error(s.title + ' returned no participant records at all — nothing was changed. Check you signed in to the right project.');
-      if (!Object.keys(doneById).length && !Object.keys(doneByEmail).length) throw new Error(s.title + ' lists no COMPLETED participant with a student ID or e-mail — nothing was changed (a sync from here would have removed every ✓).');
+      if (!Object.keys(doneById).length && !Object.keys(doneByEmail).length && !unidentifiedCompleted) throw new Error(s.title + ' lists no COMPLETED participant with a student ID or e-mail — nothing was changed (a sync from here would have removed every ✓).');
 
       /* Decide from the MERGED view of each student's roster docs — exactly
          what the ✓ / — cell shows (completions.js). Deciding per-doc made the
@@ -942,13 +943,17 @@
          auto-revoked: one the instructor set BY HAND (that override exists
          precisely for students the automatic join cannot match), and one still
          matched in the simulation. */
-      var revokes = [], stampedTotal = 0, dupHeldRevokes = 0;
+      var revokes = [], stampedTotal = 0, dupHeldRevokes = 0, identityHeldRevokes = 0;
       Object.keys(groups).forEach(function (k) {
         var g = groups[k], c = g.completed[s.key], head = g.rows[0] || {};
         if (!C.isDone(c)) return;
         stampedTotal++;
         if (c.src === 'manual') return;
         if (join.matched[k]) return;    // still completed over there (matched by ID or e-mail)
+        // Unknown identities make absence inconclusive, even if most records
+        // matched or only one roster mark would be removed. Keep safe stamps,
+        // but never offer these removals (manual or automatic verification).
+        if (unidentifiedCompleted) { identityHeldRevokes++; return; }
         if (inDupCluster[k]) { dupHeldRevokes++; return; }   // possibly the same person as a matched row — pop-up decides
         revokes.push({ rows: g.refs, who: head.name || head.studentId || head.uid });
       });
@@ -957,6 +962,11 @@
         ? ' · ' + unmatched.length + ' completed ' + s.title + ' ID(s) not in this roster: ' +
           unmatched.slice(0, 10).join(', ') + (unmatched.length > 10 ? '…' : '')
         : '');
+      var identityNote = unidentifiedCompleted
+        ? ' — ' + unidentifiedCompleted + ' completed ' + s.title +
+          ' record(s) have no usable student ID or e-mail; ' + identityHeldRevokes +
+          ' unmatched completion mark(s) were preserved. Missing identity is not evidence of non-completion.'
+        : '';
 
       /* The UNATTENDED pass at panel open does only the safe, additive half:
          stamps and identity fills. A removal is the destructive half and
@@ -1050,8 +1060,9 @@
         return doFills().then(function (fnote) {
           return (cancelled
             ? cancelled + ' proposed removal(s) were cancelled — the roster still differs from ' + s.title
-            : 'Checked ' + checkedN + ' completed ' + s.title + ' participant(s) — the roster already matches')
-            + fnote + heldNote + heldStampNote + dupRevokeNote + refusedNote + dupNote + tail;
+            : 'Checked ' + checkedN + ' identifiable completed ' + s.title + ' participant(s)' +
+              (unidentifiedCompleted ? ' — verification is incomplete' : ' — the roster already matches'))
+            + fnote + identityNote + heldNote + heldStampNote + dupRevokeNote + refusedNote + dupNote + tail;
         });
       }
       return P.firebase().then(function (F) {
@@ -1079,7 +1090,7 @@
             (already ? ' · ' + already + ' already matched' : '') +
             (cancelled ? ' · ' + cancelled + ' removal(s) cancelled' : '') +
             (failed ? ' · ⚠ ' + failed + ' write(s) FAILED — click Verify again' : '') +
-            fnote + heldNote + heldStampNote + dupRevokeNote + refusedNote + dupNote + tail +
+            fnote + identityNote + heldNote + heldStampNote + dupRevokeNote + refusedNote + dupNote + tail +
             ' — the roster and the students’ own pages update live.';
         });
       });

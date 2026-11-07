@@ -45,6 +45,11 @@
                 play duration in ms (0 = unknown; feeds the duplicates
                 pop-up's "super fast play" suggestion).
 
+     unidentifiedCompleted OPTIONAL (PortfolioFit): count of completed records
+                without a usable student ID or e-mail. A positive count blocks
+                removal proposals: an unmatched roster mark may belong to one
+                of those anonymous finishers. Positive matches still sync.
+
      identityDocs  OPTIONAL (Ideation Challenge): a read-only REPORT of the
                 participant records still carrying the throwaway login's
                 placeholders — { <student ID> : [{ sid, uid, needName,
@@ -339,7 +344,7 @@ window.SIMP_VERIFY = (function () {
        survey is submitted. */
     portfoliofit: function (c) {
       return c.D.getDocs(c.D.collection(c.fs, 'participants')).then(function (ps) {
-        var done = {}, doneByEmail = {}, records = 0;
+        var done = {}, doneByEmail = {}, records = 0, unidentifiedCompleted = 0;
         ps.forEach(function (d) {
           records++;
           var x = d.data();
@@ -348,7 +353,9 @@ window.SIMP_VERIFY = (function () {
           /* Its default registration form has no e-mail question, but an
              admin-added one lands in the registration answers. */
           var em = email(x.email) || emailInAnswers(x.registration);
-          if (!id && !em) return;               // nothing identifying at all
+          // A session may deliberately skip registration. Its anonymous
+          // finishers are still completed records, not evidence of absence.
+          if (!id && !em) { unidentifiedCompleted++; return; }
           var mark = {
             ts: tsMs(x.updatedAt) || tsMs(x.createdAt) || 0,
             session: x.sessionId ? String(x.sessionId).toUpperCase() : null,
@@ -360,7 +367,8 @@ window.SIMP_VERIFY = (function () {
           if (id) keep(done, id, mark);
           if (em) keep(doneByEmail, em, mark);
         });
-        return { records: records, doneById: done, doneByEmail: doneByEmail };
+        return { records: records, doneById: done, doneByEmail: doneByEmail,
+                 unidentifiedCompleted: unidentifiedCompleted };
       });
     },
 
