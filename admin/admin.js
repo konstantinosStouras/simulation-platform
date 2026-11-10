@@ -311,6 +311,10 @@
                ? ' · verified from ' + ((P.sim(key) || {}).title || key) : '');
   }
   function cycleGlyph(v) { return v === 'yes' ? ' ✓' : v === 'no' ? ' —' : ''; }
+  function uidsOf(row, rows) {
+    var groups = C.groupByStudent(rows || lastRows || []);
+    return (groups[C.rowKey(row)] || {}).uids || [row.uid];
+  }
   function renderRoster(rows) {
     lastRows = rows;
     /* Newest first, one row per student: a log-out + re-registration (or a
@@ -1349,7 +1353,7 @@
     try {
       var F = await P.firebase(), rows = await F.listStudents();
       var targets = selected.map(function (row) {
-        var mine = rows.filter(function (r) { return uidsOf(row).indexOf(r.uid) >= 0; });
+        var mine = rows.filter(function (r) { return uidsOf(row, rows).indexOf(r.uid) >= 0; });
         mine.sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
         return { mine: mine, profile: mine[0], label: row.name || row.studentId || row.uid };
       });
@@ -1386,6 +1390,7 @@
   }
 
   function editRegistration(row) {
+    var editUids = uidsOf(row).slice();
     var dialog = document.createElement('dialog');
     dialog.style.cssText = 'max-width:600px;width:90%;max-height:85vh;overflow:auto;border-radius:12px;padding:24px';
     var form = document.createElement('form');
@@ -1413,8 +1418,8 @@
     form.onsubmit = function (event) {
       event.preventDefault(); save.disabled = true; error.textContent = '';
       var patch = {}; Object.keys(inputs).forEach(function (k) { patch[k] = inputs[k].value.trim(); });
-      P.firebase().then(function (F) { return F.editStudents(uidsOf(row), patch); }).then(function (saved) {
-        (lastRows || []).forEach(function (r) { if (uidsOf(row).indexOf(r.uid) >= 0) Object.assign(r, saved); });
+      P.firebase().then(function (F) { return F.editStudents(editUids, patch); }).then(function (saved) {
+        (lastRows || []).forEach(function (r) { if (editUids.indexOf(r.uid) >= 0) Object.assign(r, saved); });
         renderRoster(lastRows); dialog.close();
       }).catch(function (e) { save.disabled = false; error.textContent = 'Save failed: ' + ((e && e.message) || e); });
     };
