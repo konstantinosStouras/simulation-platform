@@ -529,6 +529,21 @@
     renderVerifyButtons();
     var approvedN = roster.filter(function (r) { return r.approved; }).length;
     var filtered = visible.length !== roster.length;
+    var updateAll = $('btn-update-data-all');
+    if (updateAll) {
+      updateAll.hidden = roster.length === 0;
+      updateAll.disabled = profileUpdateBusy || !visible.length;
+      updateAll.textContent = 'Update data for ' + (filtered ? 'shown users' : 'all users') + ' (' + visible.length + ')';
+      updateAll.onclick = function () {
+        if (profileUpdateBusy) return;
+        var targets = visible.slice();
+        if (!window.confirm('Update saved profile data for ' + targets.length + (filtered ? ' shown users (filters are on)' : ' users') + ' in their completed connected simulations? Answers, scores and gameplay stay unchanged.')) return;
+        updatePlayedProfilesBatch(targets, updateAll);
+      };
+    }
+    if (profileUpdateBusy) {
+      Array.prototype.forEach.call(document.querySelectorAll('#rostertab .profile-actions button'), function (b) { b.disabled = true; });
+    }
 
     /* Bulk approval (owner request): approve — or revoke — a whole class in one
        click instead of one row at a time. It acts on the rows CURRENTLY SHOWN,
@@ -1320,34 +1335,54 @@
     });
   }
 
-  async function updatePlayedProfiles(row, button) {
+  var profileUpdateBusy = false;
+  function updatePlayedProfiles(row, button) {
+    if (profileUpdateBusy) return;
     if (!window.confirm('Update profile data for ' + (row.name || row.studentId) + ' in completed connected simulations? Save any edits first. Answers, scores and gameplay will stay unchanged.')) return;
-    button.disabled = true;
+    return updatePlayedProfilesBatch([row], button);
+  }
+  async function updatePlayedProfilesBatch(selected, button) {
+    if (profileUpdateBusy) return;
+    profileUpdateBusy = true;
     var notes = [];
+    Array.prototype.forEach.call(document.querySelectorAll('#rostertab .profile-actions button, #btn-update-data-all'), function (b) { b.disabled = true; });
     try {
       var F = await P.firebase(), rows = await F.listStudents();
-      var mine = rows.filter(function (r) { return uidsOf(row).indexOf(r.uid) >= 0; });
-      if (!mine.length) throw new Error('This registration no longer exists.');
-      mine.sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
-      var profile = mine[0];
+      var targets = selected.map(function (row) {
+        var mine = rows.filter(function (r) { return uidsOf(row).indexOf(r.uid) >= 0; });
+        mine.sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+        return { mine: mine, profile: mine[0], label: row.name || row.studentId || row.uid };
+      });
+      targets.filter(function (t) { return !t.profile; }).forEach(function (t) { notes.push(t.label + ': registration no longer exists; skipped'); });
+      targets = targets.filter(function (t) { return !!t.profile; });
       var sims = P.catalog().filter(function (s) { return s.verify && window.SIMP_VERIFY[s.verify.adapter]; });
       for (var i = 0; i < sims.length; i++) {
-        var sim = sims[i];
-        button.textContent = 'Updating ' + (i + 1) + '/' + sims.length + '…';
+        var sim = sims[i], updated = 0, skipped = 0, failures = [];
         try {
           var ctx = await simFirestore(sim);
+          // Read each simulation once per batch, even for a large class.
           var read = await window.SIMP_VERIFY[sim.verify.adapter](ctx);
-          var result = await window.SIMP_PROFILE_UPDATE.run(ctx, read.profileRecords || [], profile, mine, rows);
-          notes.push(sim.title + ': ' + result.updated + ' record(s) updated' + (result.skipped ? '; ' + result.skipped + ' ambiguous match(es) skipped' : ''));
+          for (var j = 0; j < targets.length; j++) {
+            var target = targets[j];
+            $('roster-count').textContent = 'Updating ' + sim.title + ': user ' + (j+1) + '/' + targets.length + ' (simulation ' + (i+1) + '/' + sims.length + ')…';
+            try {
+              var result = await window.SIMP_PROFILE_UPDATE.run(ctx, read.profileRecords || [], target.profile, target.mine, rows);
+              updated += result.updated; skipped += result.skipped;
+            } catch (e) { failures.push(target.label + ': ' + ((e && e.message) || e)); }
+          }
+          notes.push(sim.title + ': ' + updated + ' record(s) updated; ' + skipped + ' ambiguous match(es) skipped; ' + failures.length + ' user(s) with errors' + (failures.length ? ' — ' + failures.join('; ') : ''));
         } catch (e) { notes.push(sim.title + ': not updated — ' + ((e && e.message) || e)); }
       }
-      P.catalog().filter(function (s) { return !s.verify && rowCompleted(row,s.key); }).forEach(function (s) {
+      P.catalog().filter(function (s) { return !s.verify && selected.some(function (row) { return rowCompleted(row,s.key); }); }).forEach(function (s) {
         notes.push(s.title + ': no connected profile-update integration');
       });
       window.alert(notes.join('\n'));
-      $('roster-count').textContent = notes.join(' · ');
-    } catch (e) { window.alert('Update data failed: ' + ((e && e.message) || e)); }
-    finally { button.disabled = false; button.textContent = 'Update data'; }
+    } catch (e) { notes.push('Update data failed: ' + ((e && e.message) || e)); window.alert(notes[notes.length-1]); }
+    finally {
+      profileUpdateBusy = false;
+      if (lastRows) renderRoster(lastRows);
+      $('verify-note').textContent = notes.join(' · ');
+    }
   }
 
   function editRegistration(row) {
