@@ -535,10 +535,22 @@
      ALSO navigate this tab (the double-open bug). Same-origin sims, so the
      opener reference is nulled manually instead. */
   function launchNow(s, session) {
-    var url = P.launch(s.key, session);
-    var w = window.open(url, '_blank');
-    if (!w) { location.href = url; return false; }   /* genuinely blocked → same tab */
-    try { w.opener = null; } catch (e) {}
+    // Reserve the tab during the click, then fetch authoritative profile data.
+    // A failed read must never launch with a stale browser copy.
+    var w = window.open('about:blank', '_blank');
+    if (w) { try { w.opener = null; } catch (e) {} }
+    var ready = P.configured
+      ? P.firebase().then(function (F) { return F.profileForLaunch(); })
+      : Promise.resolve(P.getProfile());
+    ready.then(function () {
+      if (regIncomplete()) throw new Error('Please complete your registration details before playing.');
+      var url = P.launch(s.key, session);
+      if (w) w.location.href = url; else location.href = url;
+    }).catch(function (e) {
+      if (w) w.close();
+      window.alert('Could not launch: ' + ((e && e.message) || e));
+      render();
+    });
     return true;
   }
   function openModal(s) {

@@ -490,12 +490,17 @@
          behind this row — the live snapshot refreshes the table by itself.
          The student's own browser profile is untouched (they can just
          register again). */
+      var edit = document.createElement('button');
+      edit.className = 'btn ghost small';
+      edit.textContent = 'Edit';
+      edit.onclick = function () { editRegistration(r); };
+      tr.children[6 + sims.length].appendChild(edit);
       var del = document.createElement('button');
       del.className = 'btn ghost small';
       del.textContent = 'Delete';
       del.onclick = function () {
         var who = (r.name || r.email || r.studentId || 'this student');
-        if (!window.confirm('Delete the registration of ' + who + ' from the roster? This cannot be undone.')) return;
+        if (!window.confirm('Delete the registration of ' + who + ' from the platform and its recovery data? Existing simulation records and results will not be changed. This cannot be undone.')) return;
         del.disabled = true; del.textContent = 'Deleting…';
         P.firebase().then(function (F) {
           return F.deleteStudents(uidsOf(r));
@@ -888,54 +893,9 @@
         c.entries.forEach(function (e) { inDupCluster[e.key] = 1; });
       });
 
-      /* ── Identity backfill (Ideation Challenge) ────────────────────────────
-         A direct-link student registered on THIS roster — their real name and
-         e-mail are right here — but no launch handoff ever carried them into
-         the app, so its participant records show "Student" + a synthetic
-         address (owner 2026-08-16). The adapter reports which matched records
-         still carry those placeholders (read.identityDocs, a read-only
-         report); the WRITES happen here, because this pass is the one place
-         holding both handles — the roster and, via ctx, that simulation's own
-         project signed in as its instructor (whose deployed rules let the
-         instructor update any participant of their sessions). Fill-empty
-         only: a record that already carries a real name/e-mail is never
-         touched, so re-running is idempotent. */
-      var fills = [];
-      var identityDocs = read.identityDocs || {};
-      Object.keys(identityDocs).forEach(function (pid) {
-        var g = byPid[pid];
-        if (!g) return;                                  // not on this roster
-        var head = g.rows[0] || {};
-        var rName = String(head.name || '').trim();
-        var rEmail = String(head.email || '').trim();
-        if (!rName && !rEmail) return;
-        identityDocs[pid].forEach(function (t) {
-          var u = {};
-          if (rName && t.needName) u.name = rName;
-          if (rEmail && t.needEmail) u.email = rEmail;
-          if (rName && t.needPlatName) u['platform.name'] = rName;
-          if (rEmail && t.needPlatEmail) u['platform.email'] = rEmail;
-          if (!Object.keys(u).length) return;
-          /* Say where a filled platform block came from — never relabel one a
-             real handoff wrote. */
-          if ((u['platform.name'] || u['platform.email']) && t.needPlatSource) {
-            u['platform.source'] = 'simulation-platform-roster';
-          }
-          fills.push({ sid: t.sid, uid: t.uid, u: u });
-        });
-      });
-      function doFills() {
-        if (!fills.length) return Promise.resolve('');
-        return Promise.allSettled(fills.map(function (f) {
-          return ctx.D.updateDoc(ctx.D.doc(ctx.fs, 'sessions', f.sid, 'participants', f.uid), f.u);
-        })).then(function (rs) {
-          var okc = rs.filter(function (x) { return x.status === 'fulfilled'; }).length;
-          var bad = rs.length - okc;
-          return ' · filled the real name/e-mail of ' + okc + ' ' + s.title +
-            ' participant record(s) from this roster' +
-            (bad ? ' (⚠ ' + bad + ' write(s) refused)' : '');
-        });
-      }
+      // Verification is strictly read-only in every simulation project.
+      // Historical identity must never be filled from an editable roster.
+      function doFills() { return Promise.resolve(''); }
 
       /* TWO-WAY: a roster ✓ whose student is no longer a completed participant
          over there (deleted so they may retake it) must be REVOKED — the
@@ -1352,6 +1312,43 @@
       };
       box.appendChild(b);
     });
+  }
+
+  function editRegistration(row) {
+    var dialog = document.createElement('dialog');
+    dialog.style.cssText = 'max-width:600px;width:90%;max-height:85vh;overflow:auto;border-radius:12px;padding:24px';
+    var form = document.createElement('form');
+    var heading = document.createElement('h2'); heading.textContent = 'Edit registration'; form.appendChild(heading);
+    var note = document.createElement('p');
+    note.textContent = 'Changes apply to future simulation launches only. Data already recorded in any simulation stays unchanged.';
+    form.appendChild(note);
+    var inputs = {};
+    var labels = {name:'Full name',email:'Email',studentId:'Student ID',age:'Age',gender:'Gender',nationality:'Nationality',country:'Country of residence',levelOfStudy:'Level of study',workExperience:'Work experience',occupation:'Occupation',industry:'Industry',englishFluency:'English fluency'};
+    Object.keys(labels).forEach(function (key) {
+      var label = document.createElement('label'); label.style.display = 'block'; label.textContent = labels[key];
+      var options = window.SIMP_ANSWERS.sets[key];
+      var input = document.createElement(options ? 'select' : 'input');
+      if (options) {
+        var blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Choose…'; blank.disabled = true; input.appendChild(blank);
+        options.forEach(function (value) { var opt = document.createElement('option'); opt.value = value; opt.textContent = value; input.appendChild(opt); });
+      } else input.type = key === 'email' ? 'email' : 'text';
+      if (key === 'workExperience') { input.type = 'number'; input.min = '0'; input.max = '50'; input.step = '1'; }
+      input.value = row[key] == null ? '' : row[key]; input.required = true; input.style.cssText = 'display:block;width:100%;margin:5px 0 12px';
+      inputs[key] = input; label.appendChild(input); form.appendChild(label);
+    });
+    var error = document.createElement('p'); error.setAttribute('role','alert'); form.appendChild(error);
+    var save = document.createElement('button'); save.className = 'btn'; save.textContent = 'Save changes'; save.type = 'submit'; form.appendChild(save);
+    var cancel = document.createElement('button'); cancel.className = 'btn ghost'; cancel.type = 'button'; cancel.textContent = 'Cancel'; cancel.onclick = function () { dialog.close(); }; form.appendChild(cancel);
+    form.onsubmit = function (event) {
+      event.preventDefault(); save.disabled = true; error.textContent = '';
+      var patch = {}; Object.keys(inputs).forEach(function (k) { patch[k] = inputs[k].value.trim(); });
+      P.firebase().then(function (F) { return F.editStudents(uidsOf(row), patch); }).then(function (saved) {
+        (lastRows || []).forEach(function (r) { if (uidsOf(row).indexOf(r.uid) >= 0) Object.assign(r, saved); });
+        renderRoster(lastRows); dialog.close();
+      }).catch(function (e) { save.disabled = false; error.textContent = 'Save failed: ' + ((e && e.message) || e); });
+    };
+    dialog.appendChild(form); document.body.appendChild(dialog);
+    dialog.addEventListener('close', function () { dialog.remove(); }); dialog.showModal();
   }
 
   /* ---------- boot ---------- */

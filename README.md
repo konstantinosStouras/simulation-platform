@@ -484,3 +484,8 @@ Add one entry to `catalog.js` (path, session mechanism, admin URL, blurb) —
 the student cards, the admin table, and the consoles picker all render from
 it. Then activate it from the admin panel. Keep the catalog in sync with
 what's actually served (CLAUDE.md discipline).
+
+## Profile editing and simulation data isolation
+
+The roster Edit action updates the platform registration and email recovery copy. Future launches read the approved registration from the server before creating a handoff snapshot. Existing game records are never updated or deleted by these actions. Delete removes the platform roster and recovery copy; completion reports from open games cannot recreate a deleted roster record. Run node tools/profile-isolation-guard.cjs for the mocked-backend isolation regression checks.
+Verification now reads simulation records only. The former cross-project identity backfill is disabled to preserve historical participant snapshots.

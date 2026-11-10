@@ -33,6 +33,18 @@
   }
 
   /* ---------- student profile ---------- */
+  var PROFILE_FIELDS = ['name', 'email', 'studentId', 'age', 'gender', 'nationality', 'country', 'levelOfStudy', 'workExperience', 'occupation', 'industry', 'englishFluency'];
+  // Only copy registration data; approval and completion state are separate.
+  function applyProfile(data) {
+    var p = {};
+    PROFILE_FIELDS.concat(['createdAt', 'updatedAt']).forEach(function (k) {
+      if (data[k] != null) p[k] = data[k];
+    });
+    localStorage.setItem(LS_PROFILE, JSON.stringify(p));
+    localStorage.setItem(LS_SYNCED, p.updatedAt || '');
+    localStorage.setItem(LS_RECOVERY, p.updatedAt || '');
+    return p;
+  }
   function getProfile() {
     try { return JSON.parse(localStorage.getItem(LS_PROFILE) || 'null'); }
     catch (e) { return null; }
@@ -391,8 +403,19 @@
            etc.). Takes the uids backing one displayed student row, so a
            re-registration's collapsed duplicates go too. */
         deleteStudents: function (uids) {
+          // This Firebase app owns only platform registrations. Never call a
+          // simulation adapter here: historical game records belong to the game.
           return Promise.all((uids || []).map(function (uid) {
-            return D.deleteDoc(D.doc(fs, PATHS.students + '/' + uid));
+            var ref = D.doc(fs, PATHS.students + '/' + uid);
+            return D.getDoc(ref).then(function (snap) {
+              var data = snap.exists() ? snap.data() : {};
+              return (data.email ? emailKeyOf(data.email) : Promise.resolve(null)).then(function (key) {
+                var batch = D.writeBatch(fs);
+                batch.delete(ref);
+                if (key) batch.delete(D.doc(fs, PATHS.recovery + '/' + key));
+                return batch.commit();
+              });
+            });
           }));
         },
         /* Mirror the student's play-once completion markers onto their own
@@ -420,9 +443,9 @@
             var ref = D.doc(fs, PATHS.students + '/' + u.uid);
             /* uid included in the fallback so the write also passes the CREATE
                rule when the profile sync hasn't made the doc yet. */
-            var main = D.updateDoc(ref, patch).catch(function () {
-              return D.setDoc(ref, { uid: u.uid, completed: clean }, { merge: true });
-            });
+            // A completion arriving from an open game must not resurrect a
+            // registration the administrator deleted.
+            var main = D.updateDoc(ref, patch);
             var p = getProfile();
             if (!p || !p.email) return main;
             return main.then(function () {
@@ -578,6 +601,42 @@
         /* Patch fields on ONE roster doc (admin-only per the rules). Used to
            repair answers that were stored in the student's display language —
            see simulation/answers.js. Merge, so nothing else is touched. */
+        editStudents: function (uids, input) {
+          var patch = {};
+          PROFILE_FIELDS.forEach(function (k) {
+            patch[k] = String(input[k] == null ? '' : input[k]).trim();
+            if (!patch[k]) throw new Error('Please complete ' + k + '.');
+            if (window.SIMP_ANSWERS && window.SIMP_ANSWERS.sets[k] &&
+                !window.SIMP_ANSWERS.isCanonical(k, patch[k])) throw new Error('Invalid ' + k + '.');
+          });
+          if (!Number.isInteger(Number(patch.workExperience)) || Number(patch.workExperience) < 0 || Number(patch.workExperience) > 50) throw new Error('Work experience must be a whole number between 0 and 50 years.');
+          patch.updatedAt = new Date().toISOString();
+          return Promise.all(uids.map(function (uid) {
+            var ref = D.doc(fs, PATHS.students + '/' + uid);
+            return D.getDoc(ref).then(function (snap) {
+              if (!snap.exists()) throw new Error('Registration no longer exists. Refresh the roster.');
+              var old = snap.data();
+              return Promise.all([emailKeyOf(old.email || ''), emailKeyOf(patch.email)]).then(function (keys) {
+                var batch = D.writeBatch(fs);
+                batch.update(ref, patch);
+                var recovery = Object.assign({}, patch);
+                if (old.createdAt) recovery.createdAt = old.createdAt;
+                if (old.completed) recovery.completed = old.completed;
+                batch.set(D.doc(fs, PATHS.recovery + '/' + keys[1]), recovery, { merge: true });
+                if (old.email && keys[0] !== keys[1]) batch.delete(D.doc(fs, PATHS.recovery + '/' + keys[0]));
+                return batch.commit();
+              });
+            });
+          })).then(function () { return patch; });
+        },
+        profileForLaunch: function () {
+          return ensureAnon().then(function (u) {
+            return D.getDocFromServer(D.doc(fs, PATHS.students + '/' + u.uid));
+          }).then(function (snap) {
+            if (!snap.exists() || !snap.data().approved) throw new Error('Your registration must be approved before playing.');
+            return applyProfile(snap.data());
+          });
+        },
         updateStudent: function (uid, patch) {
           return D.setDoc(D.doc(fs, PATHS.students + '/' + uid), patch || {}, { merge: true });
         },
@@ -614,6 +673,10 @@
             var firstApplied = false;
             var apply = function (snap) {
               var data = snap.exists() ? snap.data() : null;
+              if (data && data.updatedAt && (!getProfile() || data.updatedAt > (getProfile().updatedAt || ''))) {
+                applyProfile(data);
+                last = undefined;
+              }
               if (data && applyRosterCompletions(data)) last = undefined;   // force a re-render
               emit(!!(data && data.approved), !!data);
               /* Only push local markers up AFTER the first roster snapshot has
