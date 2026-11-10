@@ -148,6 +148,7 @@
     try {
       var m = completed(), rv = revokedLocal();
       Object.keys(rc).forEach(function (k) {
+        if (k === '__profileHistory') return;
         var e = rc[k] || {};
         if (isTombstone(e)) {
           var rts = Number(e.rts) || 0;
@@ -618,10 +619,17 @@
               var old = snap.data();
               return Promise.all([emailKeyOf(old.email || ''), emailKeyOf(patch.email)]).then(function (keys) {
                 var batch = D.writeBatch(fs);
-                batch.update(ref, patch);
+                var history = (old.completed && old.completed.__profileHistory) || { metadata: true, identities: [] };
+                var identities = (history.identities || []).slice();
+                [old, patch].forEach(function (p) {
+                  var identity = { studentId: p.studentId || '', email: p.email || '' };
+                  if (!identities.some(function (v) { return v.studentId === identity.studentId && v.email === identity.email; })) identities.push(identity);
+                });
+                var metadata = { metadata: true, identities: identities };
+                batch.update(ref, Object.assign({}, patch, { 'completed.__profileHistory': metadata }));
                 var recovery = Object.assign({}, patch);
                 if (old.createdAt) recovery.createdAt = old.createdAt;
-                if (old.completed) recovery.completed = old.completed;
+                recovery.completed = Object.assign({}, old.completed || {}, { __profileHistory: metadata });
                 batch.set(D.doc(fs, PATHS.recovery + '/' + keys[1]), recovery, { merge: true });
                 if (old.email && keys[0] !== keys[1]) batch.delete(D.doc(fs, PATHS.recovery + '/' + keys[0]));
                 return batch.commit();

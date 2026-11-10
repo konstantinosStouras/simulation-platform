@@ -130,7 +130,7 @@ window.SIMP_VERIFY = (function () {
       ]).then(function (r) {
         var codeById = {};
         r[1].forEach(function (d) { codeById[d.id] = String(d.data().code || '').toUpperCase(); });
-        var done = {}, doneByEmail = {};
+        var done = {}, doneByEmail = {}, profileRecords = [];
         r[0].forEach(function (d) {
           var x = d.data();
           var cs = x.completedSessions || {};
@@ -148,12 +148,13 @@ window.SIMP_VERIFY = (function () {
             var ts = Number(cs[sid]) || 0;
             if (ts >= best.ts) best = { ts: ts, session: sid === '_none' ? null : (codeById[sid] || null) };
           });
+          profileRecords.push({ path: 'participants/' + d.id, data: x, id: id, email: em });
           best.id = id; best.email = em;
           best.dur = durMs(x.createdAt, best.ts || x.updatedAt);
           if (id) keep(done, id, best);
           if (em) keep(doneByEmail, em, best);
         });
-        return { records: r[0].size, doneById: done, doneByEmail: doneByEmail };
+        return { records: r[0].size, doneById: done, doneByEmail: doneByEmail, profileRecords: profileRecords };
       });
     },
 
@@ -221,6 +222,7 @@ window.SIMP_VERIFY = (function () {
             var x = d.data();
             sessions.push({
               id: d.id,
+              fields: x.registrationConfig,
               code: String(x.code || '').toUpperCase(),
               closed: x.status === 'done',
               sidFields: studentIdFieldIds(x.registrationConfig),
@@ -243,7 +245,7 @@ window.SIMP_VERIFY = (function () {
             ]).then(function (r) { return { s: s, ps: r[0], ideas: r[1] }; });
           }));
         }).then(function (rs) {
-          var done = {}, doneByEmail = {}, records = 0, identityDocs = {};
+          var done = {}, doneByEmail = {}, records = 0, identityDocs = {}, profileRecords = [];
           rs.forEach(function (r) {
             var authored = {};
             if (r.ideas) r.ideas.forEach(function (d) {
@@ -322,6 +324,7 @@ window.SIMP_VERIFY = (function () {
                 });
               }
               if (!finished) return;
+              profileRecords.push({ path: 'sessions/' + r.s.id + '/participants/' + d.id, data: x, id: id, email: em, fields: r.s.fields });
               var mark = {
                 ts: tsMs(x.surveyCompletedAt) || tsMs(x.votedAt) || tsMs(x.joinedAt) || 0,
                 session: r.s.code || null,
@@ -335,7 +338,7 @@ window.SIMP_VERIFY = (function () {
             });
           });
           return { records: records, doneById: done, doneByEmail: doneByEmail,
-                   identityDocs: identityDocs };
+                   identityDocs: identityDocs, profileRecords: profileRecords };
         });
     },
 
@@ -344,7 +347,7 @@ window.SIMP_VERIFY = (function () {
        survey is submitted. */
     portfoliofit: function (c) {
       return c.D.getDocs(c.D.collection(c.fs, 'participants')).then(function (ps) {
-        var done = {}, doneByEmail = {}, records = 0, unidentifiedCompleted = 0;
+        var done = {}, doneByEmail = {}, records = 0, unidentifiedCompleted = 0, profileRecords = [];
         ps.forEach(function (d) {
           records++;
           var x = d.data();
@@ -356,6 +359,7 @@ window.SIMP_VERIFY = (function () {
           // A session may deliberately skip registration. Its anonymous
           // finishers are still completed records, not evidence of absence.
           if (!id && !em) { unidentifiedCompleted++; return; }
+          profileRecords.push({ path: 'participants/' + d.id, data: x, id: id, email: em });
           var mark = {
             ts: tsMs(x.updatedAt) || tsMs(x.createdAt) || 0,
             session: x.sessionId ? String(x.sessionId).toUpperCase() : null,
@@ -368,7 +372,7 @@ window.SIMP_VERIFY = (function () {
           if (em) keep(doneByEmail, em, mark);
         });
         return { records: records, doneById: done, doneByEmail: doneByEmail,
-                 unidentifiedCompleted: unidentifiedCompleted };
+                 unidentifiedCompleted: unidentifiedCompleted, profileRecords: profileRecords };
       });
     },
 
@@ -383,11 +387,12 @@ window.SIMP_VERIFY = (function () {
         c.D.getDocs(c.D.query(c.D.collection(c.fs, 'events'), c.D.where('event', '==', 'session_end'))),
         c.D.getDocs(c.D.query(c.D.collection(c.fs, 'events'), c.D.limit(1)))
       ]).then(function (r) {
-        var done = {};
+        var done = {}, profileRecords = [];
         r[0].forEach(function (d) {
           var x = d.data();
           var id = pid(x.pid);
           if (!id || id === 'anon') return;
+          profileRecords.push({ path: 'events/' + d.id, data: x, id: id, email: '' });
           keep(done, id, {
             ts: tsMs(x.t),
             session: x.sessionCode ? String(x.sessionCode).toUpperCase() : null,
@@ -397,7 +402,7 @@ window.SIMP_VERIFY = (function () {
             id: id, email: '', dur: 0
           });
         });
-        return { records: r[0].size || r[1].size, doneById: done, doneByEmail: {} };
+        return { records: r[0].size || r[1].size, doneById: done, doneByEmail: {}, profileRecords: profileRecords };
       });
     }
 

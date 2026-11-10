@@ -54,7 +54,7 @@ window.SIMP_COMPLETIONS = (function () {
   /* A revoked completion is a TOMBSTONE inside the same map ({revoked:1,rts}):
      the student no longer counts as having done it, and may retake it. */
   function isTombstone(e) { return !!(e && e.revoked); }
-  function isDone(e) { return !!(e && !e.revoked); }
+  function isDone(e) { return !!(e && !e.revoked && !e.metadata); }
 
   /* Merge one student's docs, which MUST be ordered newest-first. The first
      doc that mentions a simulation decides it — a mark or a tombstone alike;

@@ -185,3 +185,6 @@ footer a { color: #5b6ea8; }
   .hero { padding: 22px 0 18px; }
   .hero .brand { font-size: 1.4rem; }
 }
+
+/* Keep all three profile actions visible in the narrow roster action column. */
+#rostertab td.profile-actions button { display: block; width: 100%; margin: 4px 0; }

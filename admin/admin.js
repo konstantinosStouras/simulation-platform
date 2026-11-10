@@ -494,7 +494,13 @@
       edit.className = 'btn ghost small';
       edit.textContent = 'Edit';
       edit.onclick = function () { editRegistration(r); };
+      tr.children[6 + sims.length].classList.add('profile-actions');
       tr.children[6 + sims.length].appendChild(edit);
+      var update = document.createElement('button');
+      update.className = 'btn ghost small'; update.textContent = 'Update data';
+      update.title = 'Copy the saved profile into completed connected simulations. Answers, scores and gameplay stay unchanged.';
+      update.onclick = function () { updatePlayedProfiles(r, update); };
+      tr.children[6 + sims.length].appendChild(update);
       var del = document.createElement('button');
       del.className = 'btn ghost small';
       del.textContent = 'Delete';
@@ -1312,6 +1318,36 @@
       };
       box.appendChild(b);
     });
+  }
+
+  async function updatePlayedProfiles(row, button) {
+    if (!window.confirm('Update profile data for ' + (row.name || row.studentId) + ' in completed connected simulations? Save any edits first. Answers, scores and gameplay will stay unchanged.')) return;
+    button.disabled = true;
+    var notes = [];
+    try {
+      var F = await P.firebase(), rows = await F.listStudents();
+      var mine = rows.filter(function (r) { return uidsOf(row).indexOf(r.uid) >= 0; });
+      if (!mine.length) throw new Error('This registration no longer exists.');
+      mine.sort(function (a,b) { return String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')); });
+      var profile = mine[0];
+      var sims = P.catalog().filter(function (s) { return s.verify && window.SIMP_VERIFY[s.verify.adapter]; });
+      for (var i = 0; i < sims.length; i++) {
+        var sim = sims[i];
+        button.textContent = 'Updating ' + (i + 1) + '/' + sims.length + '…';
+        try {
+          var ctx = await simFirestore(sim);
+          var read = await window.SIMP_VERIFY[sim.verify.adapter](ctx);
+          var result = await window.SIMP_PROFILE_UPDATE.run(ctx, read.profileRecords || [], profile, mine, rows);
+          notes.push(sim.title + ': ' + result.updated + ' record(s) updated' + (result.skipped ? '; ' + result.skipped + ' ambiguous match(es) skipped' : ''));
+        } catch (e) { notes.push(sim.title + ': not updated — ' + ((e && e.message) || e)); }
+      }
+      P.catalog().filter(function (s) { return !s.verify && rowCompleted(row,s.key); }).forEach(function (s) {
+        notes.push(s.title + ': no connected profile-update integration');
+      });
+      window.alert(notes.join('\n'));
+      $('roster-count').textContent = notes.join(' · ');
+    } catch (e) { window.alert('Update data failed: ' + ((e && e.message) || e)); }
+    finally { button.disabled = false; button.textContent = 'Update data'; }
   }
 
   function editRegistration(row) {
